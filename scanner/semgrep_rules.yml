@@ -1,0 +1,121 @@
+rules:
+  - id: hardcoded-secret-assignment
+    patterns:
+      - pattern: $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(password|passwd|secret|api_key|apikey|token|auth|credential)
+    message: |
+      Potential hardcoded secret in variable '$VAR'. Use environment variables or
+      a secrets manager instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: CWE-798
+      owasp: A02:2021
+      category: security
+
+  - id: sql-string-format
+    patterns:
+      - pattern: |
+          $CONN.execute("..." % ...)
+      - pattern: |
+          $CONN.execute("..." + ...)
+    message: |
+      String formatting in SQL query may allow injection. Use parameterized
+      queries with ? placeholders instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: CWE-89
+      owasp: A03:2021
+      category: security
+
+  - id: flask-debug-enabled
+    pattern: app.run(..., debug=True, ...)
+    message: |
+      Flask debug mode enabled. This exposes an interactive debugger and must
+      never be enabled in production.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: CWE-215
+      owasp: A05:2021
+      category: security
+
+  - id: subprocess-shell-true
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+    message: |
+      shell=True with subprocess is a command injection risk. Prefer a list
+      of arguments without shell=True.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: CWE-78
+      owasp: A03:2021
+      category: security
+
+  - id: insecure-hash-md5
+    patterns:
+      - pattern: hashlib.md5(...)
+    message: |
+      MD5 is cryptographically broken. Use hashlib.sha256() or better,
+      hashlib.blake2b() for non-password hashing. For passwords, use bcrypt/argon2.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: CWE-327
+      owasp: A02:2021
+      category: security
+
+  - id: missing-authentication-decorator
+    patterns:
+      - pattern: |
+          @app.route(...)
+          def $FUNC(...):
+            ...
+      - pattern-not: |
+          @app.route(...)
+          @$AUTH(...)
+          def $FUNC(...):
+            ...
+      - pattern-not: |
+          @app.route("/health")
+          def $FUNC(...):
+            ...
+    message: |
+      Route '$FUNC' has no authentication decorator. Ensure this endpoint is
+      intentionally public or add @require_auth.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: CWE-306
+      owasp: A01:2021
+      category: security
+
+  - id: exception-swallowed
+    pattern: |
+      except ...:
+        pass
+    message: |
+      Exception silently swallowed. At minimum log the error so failures are
+      observable in production.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: CWE-390
+      category: reliability
+
+  - id: open-redirect-risk
+    patterns:
+      - pattern: redirect(request.args.get(...))
+      - pattern: redirect(request.form.get(...))
+    message: |
+      Potential open redirect: redirecting to a user-controlled URL.
+      Validate the destination against an allowlist before redirecting.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: CWE-601
+      owasp: A01:2021
+      category: security
