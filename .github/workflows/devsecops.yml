@@ -1,0 +1,247 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  OPA_VERSION: "0.65.0"
+
+jobs:
+  secrets-scan:
+    name: "Secrets Scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: detect --source . --format json --report-path reports/gitleaks.json --exit-code 0
+
+      - name: Upload Gitleaks report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-report
+          path: reports/gitleaks.json
+          if-no-files-found: ignore
+
+  dependency-scan:
+    name: "Dependency CVE Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install target app dependencies
+        run: pip install -r target-app/requirements.txt
+
+      - name: Run Safety (Python CVE check)
+        run: |
+          pip install safety
+          mkdir -p reports
+          safety check \
+            -r target-app/requirements.txt \
+            --json \
+            --continue-on-error \
+            > reports/safety.json 2>&1 || true
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run npm audit (dashboard)
+        working-directory: dashboard
+        run: |
+          npm ci --prefer-offline
+          npm audit --json > ../reports/npm-audit.json 2>&1 || true
+
+      - name: Upload dependency reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-reports
+          path: |
+            reports/safety.json
+            reports/npm-audit.json
+
+  sast:
+    name: "SAST (Bandit + Semgrep)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run Bandit
+        run: |
+          pip install bandit
+          mkdir -p reports
+          bandit \
+            -r target-app/src/ \
+            -f json \
+            -o reports/bandit.json \
+            --exit-zero
+
+      - name: Run Semgrep (custom rules + OWASP top 10)
+        run: |
+          pip install semgrep
+          semgrep \
+            --config scanner/semgrep_rules.yml \
+            --config p/owasp-top-ten \
+            --json \
+            --output reports/semgrep.json \
+            target-app/src/ || true
+
+      - name: Upload SAST reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sast-reports
+          path: |
+            reports/bandit.json
+            reports/semgrep.json
+
+      - name: Upload Semgrep SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: reports/semgrep.json
+          category: semgrep
+        continue-on-error: true
+
+  container-scan:
+    name: "Container Scan (Trivy)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t securepipeline-target:${{ github.sha }} \
+            target-app/
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "securepipeline-target:${{ github.sha }}"
+          format: "json"
+          output: "reports/trivy.json"
+          exit-code: "0"
+          vuln-type: "os,library"
+          severity: "LOW,MEDIUM,HIGH,CRITICAL"
+
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-report
+          path: reports/trivy.json
+
+  opa-gate:
+    name: "OPA Policy Gate"
+    runs-on: ubuntu-latest
+    needs: [secrets-scan, dependency-scan, sast, container-scan]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download all scan reports
+        uses: actions/download-artifact@v4
+        with:
+          path: reports/
+          merge-multiple: true
+
+      - name: Install OPA ${{ env.OPA_VERSION }}
+        run: |
+          curl -sL -o /usr/local/bin/opa \
+            "https://github.com/open-policy-agent/opa/releases/download/v${{ env.OPA_VERSION }}/opa_linux_amd64"
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Aggregate findings
+        run: |
+          python scanner/aggregate.py \
+            --commit-sha "${{ github.sha }}" \
+            --branch "${{ github.ref_name }}" \
+            --gitleaks reports/gitleaks.json \
+            --safety reports/safety.json \
+            --npm-audit reports/npm-audit.json \
+            --bandit reports/bandit.json \
+            --semgrep reports/semgrep.json \
+            --trivy reports/trivy.json \
+            --output reports/aggregate.json
+
+      - name: Run OPA policy gate
+        id: opa
+        run: |
+          python scanner/opa_input.py \
+            --report reports/aggregate.json \
+            --policy opa/policies/devsecops.rego \
+            --output reports/opa-decision.json
+
+      - name: Post decision to dashboard
+        if: always()
+        run: |
+          if [ -n "${{ secrets.DASHBOARD_URL }}" ]; then
+            curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: ${{ secrets.DASHBOARD_API_KEY }}" \
+              -d @reports/aggregate.json \
+              "${{ secrets.DASHBOARD_URL }}/api/reports" \
+              || echo "Dashboard post failed (non-blocking)"
+          fi
+
+      - name: Upload aggregate report and OPA decision
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-report
+          path: |
+            reports/aggregate.json
+            reports/opa-decision.json
+
+      - name: Enforce gate result
+        run: |
+          python -c "import json,sys; d=json.load(open('reports/opa-decision.json')); sys.exit(0 if d['allow'] else 1)"
+
+  deploy:
+    name: "Deploy"
+    runs-on: ubuntu-latest
+    needs: [opa-gate]
+    if: needs.opa-gate.result == 'success' && github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy (placeholder)
+        run: |
+          echo "All security gates passed. Deploying commit ${{ github.sha }}..."
+          echo "Replace this step with your actual deployment logic."
