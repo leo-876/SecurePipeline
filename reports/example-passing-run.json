@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "commit_sha": "a3f9c12d8e4b7f1a2c5d9e0f3b6a8c1d4e7f0a2",
+    "branch": "main",
+    "scanned_at": "2026-05-21T11:42:07+00:00",
+    "aggregator_version": "1.0.0"
+  },
+  "summary": {
+    "total_findings": 6,
+    "risk_score": 14,
+    "gate_passed": true,
+    "by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 3,
+      "info": 1
+    },
+    "by_tool": {
+      "bandit": 3,
+      "semgrep": 2,
+      "safety": 1
+    }
+  },
+  "findings": [
+    {
+      "tool": "bandit",
+      "severity": "medium",
+      "rule_id": "B324",
+      "message": "Use of weak MD5 or SHA1 hash for security. Consider usedforsecurity=False",
+      "file": "target-app/src/app.py",
+      "line": 47,
+      "cwe": 327
+    },
+    {
+      "tool": "semgrep",
+      "severity": "medium",
+      "rule_id": "missing-authentication-decorator",
+      "message": "Route 'health' has no authentication decorator. Ensure this endpoint is intentionally public or add @require_auth.",
+      "file": "target-app/src/app.py",
+      "line": 58,
+      "cwe": "CWE-306"
+    },
+    {
+      "tool": "bandit",
+      "severity": "low",
+      "rule_id": "B105",
+      "message": "Possible hardcoded password: 'default-salt-change-me'",
+      "file": "target-app/src/app.py",
+      "line": 47,
+      "cwe": 259
+    },
+    {
+      "tool": "safety",
+      "severity": "low",
+      "rule_id": "CVE-2024-49767",
+      "message": "flask 3.0.3 - Potential denial of service via multipart/form-data requests",
+      "file": "requirements.txt",
+      "line": 0,
+      "cvss": 3.1
+    },
+    {
+      "tool": "bandit",
+      "severity": "low",
+      "rule_id": "B108",
+      "message": "Probable insecure usage of temp file/directory: /tmp/app.db",
+      "file": "target-app/src/app.py",
+      "line": 22,
+      "cwe": 377
+    },
+    {
+      "tool": "semgrep",
+      "severity": "info",
+      "rule_id": "exception-swallowed",
+      "message": "Exception silently swallowed. At minimum log the error so failures are observable in production.",
+      "file": "target-app/src/db.py",
+      "line": 31,
+      "cwe": "CWE-390"
+    }
+  ]
+}
