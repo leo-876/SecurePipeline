@@ -1,0 +1,7 @@
+# Scanner dependencies for the DevSecOps pipeline
+# Install with: pip install -r scanner/requirements.txt
+
+bandit==1.7.9
+semgrep==1.75.0
+safety==3.2.3
+pip-audit==2.7.3
